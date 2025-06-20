@@ -20,7 +20,6 @@ try:
     import torch
     import torch.distributed
 
-    import habitat_sim.utils.datasets_download as data_downloader
     from habitat_baselines.common.base_trainer import BaseRLTrainer
     from habitat_baselines.common.baseline_registry import baseline_registry
     from habitat_baselines.config.default import get_config
@@ -44,14 +43,6 @@ from habitat_baselines.config.default_structured_configs import (
     Cube2FishConfig,
 )
 from habitat_baselines.rl.ppo.evaluator import pause_envs
-
-
-@pytest.fixture(scope="module", autouse=True)
-def download_data():
-    # Download the needed datasets
-    data_downloader.main(
-        ["--uids", "rearrange_task_assets", "--no-replace", "--no-prune"]
-    )
 
 
 @pytest.mark.skipif(
@@ -185,14 +176,14 @@ def test_cpca():
 )
 @pytest.mark.parametrize("camera", ["equirect", "fisheye", "cubemap"])
 @pytest.mark.parametrize("sensor_type", ["rgb", "depth"])
-def test_cubemap_stiching(
+def test_cubemap_stitching(
     test_cfg_path: str, mode: str, camera: str, sensor_type: str
 ):
     meta_config = get_config(config_path=test_cfg_path)
     with read_write(meta_config):
         config = meta_config.habitat
         CAMERA_NUM = 6
-        orient = [
+        orient: list[list[float]] = [
             [0, math.pi, 0],  # Back
             [-math.pi / 2, 0, 0],  # Down
             [0, 0, 0],  # Front
@@ -213,7 +204,7 @@ def test_cubemap_stiching(
             }
         else:
             raise ValueError(
-                "Typo in the sensor type in test_cubemap_stiching"
+                "Typo in the sensor type in test_cubemap_stitching"
             )
 
         sensor = agent_config.sim_sensors[f"{sensor_type}_sensor"]
@@ -440,7 +431,7 @@ def test_batch_obs(sensor_device, batched_device):
         "cuda" in (sensor_device, batched_device)
         and not torch.cuda.is_available()
     ):
-        pytest.skip("CUDA not avaliable")
+        pytest.skip("CUDA not available")
 
     sensor_device = torch.device(sensor_device)
     batched_device = torch.device(batched_device)

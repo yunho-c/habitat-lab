@@ -69,6 +69,53 @@ class KeyCode(IntEnum, metaclass=KeyCodeMetaEnum):
     # fmt: on
 
 
+class MouseButtonMetaEnum(EnumMeta):
+    keycode_value_cache: Set[int] = None
+
+    # Override 'in' keyword to check whether the specified integer exists in 'MouseButton'.
+    def __contains__(cls, value) -> bool:
+        if MouseButtonMetaEnum.keycode_value_cache == None:
+            MouseButtonMetaEnum.keycode_value_cache = set(MouseButton)
+        return value in MouseButtonMetaEnum.keycode_value_cache
+
+
+class MouseButton(IntEnum, metaclass=MouseButtonMetaEnum):
+    """
+    Mouse buttons available to control habitat-hitl.
+    """
+
+    # fmt: off
+    LEFT   = 0
+    RIGHT  = 1
+    MIDDLE = 2
+    # fmt: on
+
+
+class XRButtonMetaEnum(EnumMeta):
+    keycode_value_cache: Set[int] = None
+
+    # Override 'in' keyword to check whether the specified integer exists in 'MouseButton'.
+    def __contains__(cls, value) -> bool:
+        if XRButtonMetaEnum.keycode_value_cache == None:
+            XRButtonMetaEnum.keycode_value_cache = set(XRButton)
+        return value in XRButtonMetaEnum.keycode_value_cache
+
+
+class XRButton(IntEnum, metaclass=XRButtonMetaEnum):
+    """
+    XR buttons available to control habitat-hitl.
+    """
+
+    # fmt: off
+    START                   = 0x01
+    ONE                     = 0x02
+    TWO                     = 0x03
+    PRIMARY_HAND_TRIGGER    = 0x04
+    PRIMARY_INDEX_TRIGGER   = 0x05
+    PRIMARY_THUMBSTICK      = 0x06
+    # fmt: on
+
+
 # On headless systems, we may be unable to import magnum.platform.glfw.Application.
 try:
     from magnum.platform.glfw import Application
@@ -80,53 +127,66 @@ except ImportError:
     )
     magnum_enabled = False
 if magnum_enabled:
-    magnum_keymap: Dict[Application.KeyEvent.Key, KeyCode] = {
+    magnum_keymap: Dict[Application.Key, KeyCode] = {
         # fmt: off
-        Application.KeyEvent.Key.A       : KeyCode.A     ,
-        Application.KeyEvent.Key.B       : KeyCode.B     ,
-        Application.KeyEvent.Key.C       : KeyCode.C     ,
-        Application.KeyEvent.Key.D       : KeyCode.D     ,
-        Application.KeyEvent.Key.E       : KeyCode.E     ,
-        Application.KeyEvent.Key.F       : KeyCode.F     ,
-        Application.KeyEvent.Key.G       : KeyCode.G     ,
-        Application.KeyEvent.Key.H       : KeyCode.H     ,
-        Application.KeyEvent.Key.I       : KeyCode.I     ,
-        Application.KeyEvent.Key.J       : KeyCode.J     ,
-        Application.KeyEvent.Key.K       : KeyCode.K     ,
-        Application.KeyEvent.Key.L       : KeyCode.L     ,
-        Application.KeyEvent.Key.M       : KeyCode.M     ,
-        Application.KeyEvent.Key.N       : KeyCode.N     ,
-        Application.KeyEvent.Key.O       : KeyCode.O     ,
-        Application.KeyEvent.Key.P       : KeyCode.P     ,
-        Application.KeyEvent.Key.Q       : KeyCode.Q     ,
-        Application.KeyEvent.Key.R       : KeyCode.R     ,
-        Application.KeyEvent.Key.S       : KeyCode.S     ,
-        Application.KeyEvent.Key.T       : KeyCode.T     ,
-        Application.KeyEvent.Key.U       : KeyCode.U     ,
-        Application.KeyEvent.Key.V       : KeyCode.V     ,
-        Application.KeyEvent.Key.W       : KeyCode.W     ,
-        Application.KeyEvent.Key.X       : KeyCode.X     ,
-        Application.KeyEvent.Key.Y       : KeyCode.Y     ,
-        Application.KeyEvent.Key.Z       : KeyCode.Z     ,
-        Application.KeyEvent.Key.ZERO    : KeyCode.ZERO  ,
-        Application.KeyEvent.Key.ONE     : KeyCode.ONE   ,
-        Application.KeyEvent.Key.TWO     : KeyCode.TWO   ,
-        Application.KeyEvent.Key.THREE   : KeyCode.THREE ,
-        Application.KeyEvent.Key.FOUR    : KeyCode.FOUR  ,
-        Application.KeyEvent.Key.FIVE    : KeyCode.FIVE  ,
-        Application.KeyEvent.Key.SIX     : KeyCode.SIX   ,
-        Application.KeyEvent.Key.SEVEN   : KeyCode.SEVEN ,
-        Application.KeyEvent.Key.EIGHT   : KeyCode.EIGHT ,
-        Application.KeyEvent.Key.NINE    : KeyCode.NINE  ,
-        Application.KeyEvent.Key.ESC     : KeyCode.ESC   ,
-        Application.KeyEvent.Key.SPACE   : KeyCode.SPACE ,
-        Application.KeyEvent.Key.TAB     : KeyCode.TAB   ,
+        Application.Key.A       : KeyCode.A     ,
+        Application.Key.B       : KeyCode.B     ,
+        Application.Key.C       : KeyCode.C     ,
+        Application.Key.D       : KeyCode.D     ,
+        Application.Key.E       : KeyCode.E     ,
+        Application.Key.F       : KeyCode.F     ,
+        Application.Key.G       : KeyCode.G     ,
+        Application.Key.H       : KeyCode.H     ,
+        Application.Key.I       : KeyCode.I     ,
+        Application.Key.J       : KeyCode.J     ,
+        Application.Key.K       : KeyCode.K     ,
+        Application.Key.L       : KeyCode.L     ,
+        Application.Key.M       : KeyCode.M     ,
+        Application.Key.N       : KeyCode.N     ,
+        Application.Key.O       : KeyCode.O     ,
+        Application.Key.P       : KeyCode.P     ,
+        Application.Key.Q       : KeyCode.Q     ,
+        Application.Key.R       : KeyCode.R     ,
+        Application.Key.S       : KeyCode.S     ,
+        Application.Key.T       : KeyCode.T     ,
+        Application.Key.U       : KeyCode.U     ,
+        Application.Key.V       : KeyCode.V     ,
+        Application.Key.W       : KeyCode.W     ,
+        Application.Key.X       : KeyCode.X     ,
+        Application.Key.Y       : KeyCode.Y     ,
+        Application.Key.Z       : KeyCode.Z     ,
+        Application.Key.ZERO    : KeyCode.ZERO  ,
+        Application.Key.ONE     : KeyCode.ONE   ,
+        Application.Key.TWO     : KeyCode.TWO   ,
+        Application.Key.THREE   : KeyCode.THREE ,
+        Application.Key.FOUR    : KeyCode.FOUR  ,
+        Application.Key.FIVE    : KeyCode.FIVE  ,
+        Application.Key.SIX     : KeyCode.SIX   ,
+        Application.Key.SEVEN   : KeyCode.SEVEN ,
+        Application.Key.EIGHT   : KeyCode.EIGHT ,
+        Application.Key.NINE    : KeyCode.NINE  ,
+        Application.Key.ESC     : KeyCode.ESC   ,
+        Application.Key.SPACE   : KeyCode.SPACE ,
+        Application.Key.TAB     : KeyCode.TAB   ,
+        # fmt: on
+    }
+
+    magnum_mouse_keymap: Dict[Application.Pointer, MouseButton] = {
+        # fmt: off
+        Application.Pointer.MOUSE_LEFT   : MouseButton.LEFT  ,
+        Application.Pointer.MOUSE_RIGHT  : MouseButton.RIGHT ,
+        Application.Pointer.MOUSE_MIDDLE : MouseButton.MIDDLE,
         # fmt: on
     }
 
 
 class MagnumKeyConverter:
-    def convert(key: Any) -> Optional[KeyCode]:
+    def convert_key(key: Any) -> Optional[KeyCode]:
         if magnum_enabled and key in magnum_keymap:
             return magnum_keymap[key]
+        return None
+
+    def convert_mouse_button(button: Any) -> Optional[MouseButton]:
+        if magnum_enabled and button in magnum_mouse_keymap:
+            return magnum_mouse_keymap[button]
         return None

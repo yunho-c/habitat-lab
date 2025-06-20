@@ -10,10 +10,11 @@ import magnum as mn
 import numpy as np
 
 from habitat_hitl.core.gui_input import GuiInput
+from habitat_hitl.core.key_mapping import KeyCode, MouseButton
 
 
 class CameraHelper:
-    def __init__(self, hitl_config, gui_input):
+    def __init__(self, hitl_config, gui_input: GuiInput):
         # lookat offset yaw (spin left/right) and pitch (up/down)
         # to enable camera rotation and pitch control
         self._first_person_mode = hitl_config.camera.first_person_mode
@@ -61,26 +62,28 @@ class CameraHelper:
         # update yaw and pitch using ADIK keys
         cam_rot_angle = 0.1
 
-        if self._gui_input.get_key(GuiInput.KeyNS.I):
+        if self._gui_input.get_key(KeyCode.I):
             self._lookat_offset_pitch -= cam_rot_angle
-        if self._gui_input.get_key(GuiInput.KeyNS.K):
+        if self._gui_input.get_key(KeyCode.K):
             self._lookat_offset_pitch += cam_rot_angle
         self._lookat_offset_pitch = np.clip(
             self._lookat_offset_pitch,
             self._min_lookat_offset_pitch,
             self._max_lookat_offset_pitch,
         )
-        if self._gui_input.get_key(GuiInput.KeyNS.A):
+        if self._gui_input.get_key(KeyCode.A):
             self._lookat_offset_yaw -= cam_rot_angle
-        if self._gui_input.get_key(GuiInput.KeyNS.D):
+        if self._gui_input.get_key(KeyCode.D):
             self._lookat_offset_yaw += cam_rot_angle
 
     def _camera_pitch_and_yaw_mouse_control(self):
-        enable_mouse_control = self._gui_input.get_key(GuiInput.KeyNS.R)
+        enable_mouse_control = self._gui_input.get_key(
+            KeyCode.R
+        ) or self._gui_input.get_mouse_button(MouseButton.MIDDLE)
 
         if enable_mouse_control:
             # update yaw and pitch by scale * mouse relative position delta
-            scale = 1 / 50
+            scale = 0.003
             self._lookat_offset_yaw += (
                 scale * self._gui_input.relative_mouse_position[0]
             )
@@ -149,6 +152,14 @@ class CameraHelper:
         forward_dir.y = 0
         # todo: handle case of degenerate zero vector here due to camera looking
         # straight up or down
+        forward_dir = forward_dir.normalized()
+        return forward_dir
+
+    def get_cam_forward_vector(self) -> Optional[mn.Vector3]:
+        assert self._cam_transform
+        forward_dir = self._cam_transform.transform_vector(
+            -mn.Vector3(0, 0, 1)
+        )
         forward_dir = forward_dir.normalized()
         return forward_dir
 

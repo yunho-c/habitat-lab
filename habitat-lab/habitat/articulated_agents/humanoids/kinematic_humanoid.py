@@ -16,6 +16,8 @@ from habitat.articulated_agents.mobile_manipulator import (
 )
 from habitat_sim.utils.common import orthonormalize_rotation_shear
 
+HUMANOID_CAMERA_HEIGHT_OFFSET = 0.5
+
 
 class KinematicHumanoid(MobileManipulator):
     def _get_humanoid_params(self):
@@ -36,8 +38,12 @@ class KinematicHumanoid(MobileManipulator):
             ee_constraint=np.zeros((2, 2, 3)),
             cameras={
                 "head": ArticulatedAgentCameraParams(
-                    cam_offset_pos=mn.Vector3(0.0, 0.5, 0.25),
-                    cam_look_at_pos=mn.Vector3(0.0, 0.5, 0.75),
+                    cam_offset_pos=mn.Vector3(
+                        0.0, HUMANOID_CAMERA_HEIGHT_OFFSET, 0.25
+                    ),
+                    cam_look_at_pos=mn.Vector3(
+                        0.0, HUMANOID_CAMERA_HEIGHT_OFFSET, 0.75
+                    ),
                     attached_link_id=-1,
                 ),
                 "third": ArticulatedAgentCameraParams(
@@ -59,6 +65,8 @@ class KinematicHumanoid(MobileManipulator):
     def __init__(
         self, agent_cfg, sim, limit_robo_joints=False, fixed_base=False
     ):
+        auto_update_sensor_transform = agent_cfg.auto_update_sensor_transform
+
         super().__init__(
             self._get_humanoid_params(),
             agent_cfg,
@@ -66,6 +74,7 @@ class KinematicHumanoid(MobileManipulator):
             limit_robo_joints,
             fixed_base,
             maintain_link_order=True,
+            auto_update_sensor_transform=auto_update_sensor_transform,
         )
 
         # The offset and base transform are used so that the
@@ -136,10 +145,31 @@ class KinematicHumanoid(MobileManipulator):
 
     @property
     def base_rot(self) -> float:
-        return float(self.sim_obj.rotation.angle() + mn.Rad(self.offset_rot))
+        """
+        Returns scalar rotation angle of the humanoid around the Y axis.
+        Within range (-pi,pi) consistency with setter is tested. Outside that range, an equivalent but distinct rotation angle may be returned (e.g. 2pi == -2pi == 0).
+        NOTE: for humanoid, an additional offset_rot is considered between the model and this wrapper class.
+        """
+        angle = float(self.sim_obj.rotation.angle())
+        # NOTE: if the quaternion axis is inverted (-Y) then the angle will be negated
+        if self.sim_obj.rotation.axis()[1] < 0:
+            angle = -1 * angle
+        angle += float(mn.Rad(self.offset_rot))
+        # NOTE: This offsetting gives us guarantees of consistency in the (-pi, pi) range.
+        if angle > mn.math.pi:
+            angle -= mn.math.pi * 2
+        elif angle < -mn.math.pi:
+            angle += mn.math.pi * 2
+        # NOTE: This final fmod ensures that large angles are mapped back into the -2pi, 2pi range.
+        angle = mn.math.fmod(angle, 2 * mn.math.pi)
+        return angle
 
     @base_rot.setter
     def base_rot(self, rotation_y_rad: float):
+        """
+        Set the scalar rotation angle of the humanoid around the Y axis.
+        NOTE: for humanoid, an additional offset_rot is considered between the model and this wrapper class.
+        """
         if self._base_type == "mobile" or self._base_type == "leg":
             angle_rot = -self.offset_rot
             self.sim_obj.rotation = mn.Quaternion.rotation(
@@ -164,7 +194,7 @@ class KinematicHumanoid(MobileManipulator):
         """Updates the camera transformations and performs necessary checks on
         joint limits and sleep states.
         """
-        if self._cameras is not None:
+        if self._cameras is not None and self._auto_update_sensor_transforms:
             # get the transformation
             agent_node = self._sim._default_agent.scene_node
             inv_T = agent_node.transformation.inverted()

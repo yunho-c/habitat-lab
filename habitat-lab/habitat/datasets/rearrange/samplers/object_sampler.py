@@ -300,28 +300,7 @@ class ObjectSampler:
             if isinstance(receptacle, OnTopOfReceptacle):
                 snap_down = False
             if snap_down:
-                support_object_ids = [habitat_sim.stage_id]
-                # add support object ids for non-stage receptacles
-                if receptacle.is_parent_object_articulated:
-                    ao_instance = sim.get_articulated_object_manager().get_object_by_handle(
-                        receptacle.parent_object_handle
-                    )
-                    for (
-                        object_id,
-                        link_ix,
-                    ) in ao_instance.link_object_ids.items():
-                        if receptacle.parent_link == link_ix:
-                            support_object_ids = [
-                                object_id,
-                                ao_instance.object_id,
-                            ]
-                            break
-                elif receptacle.parent_object_handle is not None:
-                    support_object_ids = [
-                        sim.get_rigid_object_manager()
-                        .get_object_by_handle(receptacle.parent_object_handle)
-                        .object_id
-                    ]
+                support_object_ids = receptacle.get_support_object_ids(sim)
                 snap_success = sutils.snap_down(
                     sim,
                     new_object,
@@ -339,7 +318,7 @@ class ObjectSampler:
                         height=1.3,
                         nav_to_min_distance=self.nav_to_min_distance,
                         nav_island=self.largest_island_id,
-                        target_object_id=new_object.object_id,
+                        target_object_ids=[new_object.object_id],
                     ):
                         logger.info(
                             "   - object is not accessible from navmesh, rejecting placement."
@@ -358,7 +337,7 @@ class ObjectSampler:
                     height=1.3,
                     nav_to_min_distance=self.nav_to_min_distance,
                     nav_island=self.largest_island_id,
-                    target_object_id=new_object.object_id,
+                    target_object_ids=[new_object.object_id],
                 ):
                     logger.info(
                         "   - object is not accessible from navmesh, rejecting placement."

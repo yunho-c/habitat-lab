@@ -38,7 +38,6 @@ See [habitat-hitl/README.md](../../../habitat-hitl/README.md).
 ## Example launch command (mouse/keyboard)
 
 ```bash
-HABITAT_SIM_LOG=warning MAGNUM_LOG=warning \
 python examples/hitl/pick_throw_vr/pick_throw_vr.py
 ```
 
@@ -80,9 +79,7 @@ The standard keyboard-mouse launch command-line arguments can be used with those
 * The `habitat_hitl.networking.enable=True` config override launches the Pick_throw_vr app as a server, allowing a remote client (e.g. VR headset) to connect and control the human avatar.
 
 ```bash
-HABITAT_SIM_LOG=warning MAGNUM_LOG=warning \
-python examples/hitl/pick_throw_vr/pick_throw_vr.py \
-habitat_hitl.networking.enable=True
+python examples/hitl/pick_throw_vr/pick_throw_vr.py habitat_hitl.networking.enable=True
 ```
 
 We also have an experimental headless server:
@@ -206,7 +203,7 @@ See [the troubleshooting steps on siro_hitl_unity_client](https://github.com/eun
 
 ### Connection Issues
 
-* Make sure that your server firewall allows incoming connections to the port `8888`.
+* Make sure that your server firewall allows incoming connections to the port `18000`.
 * Check that the Unity client `config.txt` file lists to the correct address. See [this section](#connection).
 * Make sure that both devices are on the same network.
 * Corporate networks may introduce additional hurdles. To circumvent these, you can use the wifi hotspot on your phone or a separate router.

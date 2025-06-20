@@ -16,13 +16,12 @@ import corrade as cr
 import magnum as mn
 import numpy as np
 
+import habitat.sims.habitat_simulator.sim_utilities as sutils
 import habitat_sim
 from habitat.core.logging import logger
 from habitat.datasets.rearrange.navmesh_utils import is_accessible
-from habitat.tasks.rearrange.utils import get_ao_link_aabb, get_rigid_aabb
+from habitat.sims.habitat_simulator.debug_visualizer import dblr_draw_bb
 from habitat.utils.geometry_utils import random_triangle_point
-from habitat_sim.utils.common import quat_from_two_vectors as qf2v
-from habitat_sim.utils.common import quat_to_magnum as qtm
 
 # global module singleton for mesh importing instantiated upon first import
 _manager = mn.trade.ImporterManager()
@@ -46,7 +45,7 @@ class Receptacle(ABC):
         """
         :param name: The name of the Receptacle. Should be unique and descriptive for any one object.
         :param parent_object_handle: The rigid or articulated object instance handle for the parent object to which the Receptacle is attached. None for globally defined stage Receptacles.
-        :param parent_link: Index of the link to which the Receptacle is attached if the parent is an ArticulatedObject. -1 denotes the base link. None for rigid objects and stage Receptables.
+        :param parent_link: Index of the link to which the Receptacle is attached if the parent is an ArticulatedObject. -1 denotes the base link. None for rigid objects and stage Receptacles.
         :param up: The "up" direction of the receptacle in local AABB space. Used for optionally culling receptacles in un-supportive states such as inverted surfaces.
         """
         self.name = name
@@ -142,6 +141,47 @@ class Receptacle(ABC):
         """
         raise NotImplementedError
 
+    def get_support_object_ids(self, sim: habitat_sim.Simulator) -> List[int]:
+        """
+        Get a list of object ids representing the set of acceptable support surfaces for this receptacle.
+
+        :param sim: The Simulator instance.
+        :return: A list of object id integers for this Receptacle's set of valid support surfaces.
+        """
+        if self.parent_object_handle is None:
+            # this is the stage
+            return [habitat_sim.stage_id]
+
+        parent_object = sutils.get_obj_from_handle(
+            sim, self.parent_object_handle
+        )
+        if parent_object.is_articulated:
+            if self.parent_link <= 0:
+                # Receptacle is attached to the body link, so only allow placements there
+                # NOTE: If collision objects are marked STATIC in the URDF (via collision_group==2) then they will be attached to the -1 link as STATIC rigids, even if defined at the 0 link
+                return [
+                    parent_object.object_id,
+                    parent_object.link_ids_to_object_ids[0],
+                ]
+            else:
+                # Receptacle is attached to a moveable link, only allow samples on that link
+                return [parent_object.link_ids_to_object_ids[self.parent_link]]
+
+        # for rigid objects support surface is the object_id
+        return [parent_object.object_id]
+
+    def dist_to_rec(
+        self, sim: habitat_sim.Simulator, point: np.ndarray
+    ) -> float:
+        """
+        Compute and return the distance from a 3D global point to the Receptacle.
+
+        :param sim: The Simulator instance for querying global transforms.
+        :param point: A 3D point in global space. E.g. the bottom center point of a placed object.
+        :return: Point to Receptacle distance.
+        """
+        raise NotImplementedError
+
 
 class OnTopOfReceptacle(Receptacle):
     def __init__(self, name: str, places: List[str]):
@@ -195,8 +235,8 @@ class AABBReceptacle(Receptacle):
         :param bounds: The AABB of the Receptacle.
         :param up: The "up" direction of the Receptacle in local AABB space. Used for optionally culling receptacles in un-supportive states such as inverted surfaces.
         :param parent_object_handle: The rigid or articulated object instance handle for the parent object to which the Receptacle is attached. None for globally defined stage Receptacles.
-        :param parent_link: Index of the link to which the Receptacle is attached if the parent is an ArticulatedObject. -1 denotes the base link. None for rigid objects and stage Receptables.
-        :param rotation: Optional rotation of the Receptacle AABB. Only used for globally defined stage Receptacles to provide flexability.
+        :param parent_link: Index of the link to which the Receptacle is attached if the parent is an ArticulatedObject. -1 denotes the base link. None for rigid objects and stage Receptacles.
+        :param rotation: Optional rotation of the Receptacle AABB. Only used for globally defined stage Receptacles to provide flexibility.
         """
         super().__init__(name, parent_object_handle, parent_link, up)
         self._bounds = bounds
@@ -237,19 +277,20 @@ class AABBReceptacle(Receptacle):
             # this is a global stage receptacle
             # TODO: add an API query or other method to avoid reconstructing the stage frame here
             stage_config = sim.get_stage_initialization_template()
-            r_frameup_worldup = qf2v(
-                habitat_sim.geo.UP, stage_config.orient_up
+
+            r_frameup_worldup = mn.Quaternion.rotation(
+                habitat_sim.geo.UP, stage_config.orient_up.normalized()
             )
-            v_prime = qtm(r_frameup_worldup).transform_vector(
-                mn.Vector3(habitat_sim.geo.FRONT)
-            )
+            v_prime = r_frameup_worldup.transform_vector_normalized(
+                habitat_sim.geo.FRONT
+            ).normalized()
             world_to_local = (
-                qf2v(np.array(v_prime), np.array(stage_config.orient_front))
+                mn.Quaternion.rotation(
+                    v_prime, stage_config.orient_front.normalized()
+                )
                 * r_frameup_worldup
-            )
-            world_to_local = habitat_sim.utils.common.quat_to_magnum(
-                world_to_local
-            )
+            ).normalized()
+
             local_to_world = world_to_local.inverted()
             l2w4 = mn.Matrix4.from_(local_to_world.to_matrix(), mn.Vector3())
 
@@ -273,13 +314,12 @@ class AABBReceptacle(Receptacle):
         :param sim: Simulator must be provided.
         :param color: Optionally provide wireframe color, otherwise magenta.
         """
-        # draw the box
-        if color is None:
-            color = mn.Color4.magenta()
-        dblr = sim.get_debug_line_render()
-        dblr.push_transform(self.get_global_transform(sim))
-        dblr.draw_box(self.bounds.min, self.bounds.max, color)
-        dblr.pop_transform()
+        dblr_draw_bb(
+            sim.get_debug_line_render(),
+            self.bounds,
+            self.get_global_transform(sim),
+            color,
+        )
 
 
 def assert_triangles(indices: List[int]) -> None:
@@ -304,6 +344,7 @@ class TriangleMeshReceptacle(Receptacle):
         parent_object_handle: str = None,
         parent_link: Optional[int] = None,
         up: Optional[mn.Vector3] = None,
+        scale: Union[float, mn.Vector3] = None,
     ) -> None:
         """
         Initialize the TriangleMeshReceptacle from mesh data and pre-compute the area weighted accumulator.
@@ -311,11 +352,21 @@ class TriangleMeshReceptacle(Receptacle):
         :param name: The name of the Receptacle. Should be unique and descriptive for any one object.
         :param mesh_data: The Receptacle's mesh data. A magnum.trade.MeshData object (indices len divisible by 3).
         :param parent_object_handle: The rigid or articulated object instance handle for the parent object to which the Receptacle is attached. None for globally defined stage Receptacles.
-        :param parent_link: Index of the link to which the Receptacle is attached if the parent is an ArticulatedObject. -1 denotes the base link. None for rigid objects and stage Receptables.
+        :param parent_link: Index of the link to which the Receptacle is attached if the parent is an ArticulatedObject. -1 denotes the base link. None for rigid objects and stage Receptacles.
         :param up: The "up" direction of the Receptacle in local AABB space. Used for optionally culling receptacles in un-supportive states such as inverted surfaces.
+        :param scale: The scaling vector (or uniform scaling float) to be applied to the mesh.
         """
         super().__init__(name, parent_object_handle, parent_link, up)
         self.mesh_data = mesh_data
+
+        # apply the scale
+        if scale is not None:
+            m_verts = self.mesh_data.mutable_attribute(
+                mn.trade.MeshAttribute.POSITION
+            )
+            for vix, v in enumerate(m_verts):
+                m_verts[vix] = v * scale
+
         self.area_weighted_accumulator = (
             []
         )  # normalized float weights for each triangle for sampling
@@ -323,12 +374,12 @@ class TriangleMeshReceptacle(Receptacle):
 
         # pre-compute the normalized cumulative area of all triangle faces for later sampling
         self.total_area = 0.0
-        triangles = []
+        self.triangles = []
         for f_ix in range(int(len(mesh_data.indices) / 3)):
             v = self.get_face_verts(f_ix)
             w1 = v[1] - v[0]
             w2 = v[2] - v[1]
-            triangles.append(v)
+            self.triangles.append(v)
             self.area_weighted_accumulator.append(
                 0.5 * mn.math.cross(w1, w2).length()
             )
@@ -433,13 +484,151 @@ class TriangleMeshReceptacle(Receptacle):
         dblr = sim.get_debug_line_render()
         dblr.push_transform(self.get_global_transform(sim))
         assert_triangles(self.mesh_data.indices)
-        for face in range(int(len(self.mesh_data.indices) / 3)):
-            verts = self.get_face_verts(f_ix=face)
+        for verts in self.triangles:
             for edge in range(3):
                 dblr.draw_transformed_line(
                     verts[edge], verts[(edge + 1) % 3], color
                 )
         dblr.pop_transform()
+
+    def dist_to_rec(
+        self, sim: habitat_sim.Simulator, point: np.ndarray
+    ) -> float:
+        """
+        Compute and return the distance from a 3D global point to the Receptacle. Uses point to mesh distance check.
+
+        :param sim: The Simulator instance.
+        :param point: A 3D point in global space. E.g. the bottom center point of a placed object.
+        :return: Point to Receptacle distance.
+        """
+        t_form = self.get_global_transform(sim)
+        # optimization: transform the point into local space instead of transforming the mesh into global space
+        local_point = t_form.inverted().transform_point(point)
+        # iterate over the triangles, getting point to edge distances
+        # NOTE: list of lists, each with 3 numpy arrays, one for each vertex
+        np_tri = np.array(self.triangles)
+        np_point = np.array(local_point)
+        # compute the minimum point to mesh distance
+        p_to_t_dist = sutils.point_to_tri_dist(np_point, np_tri)[0]
+        return p_to_t_dist
+
+
+class AnyObjectReceptacle(Receptacle):
+    """
+    The AnyObjectReceptacle enables any rigid or articulated object or link to be used as a Receptacle without metadata annotation.
+    It uses the top surface of an object's global space bounding box as a heuristic for the sampling area.
+    The sample efficiency is likely to be poor (especially for concave objects like L-shaped sofas), TODO: this could be mitigated by the option to pre-compute a discrete set of candidate points via raycast upon initialization.
+    Also, this heuristic will not support use of interior surfaces such as cubby and cabinet shelves since volumetric occupancy is not considered.
+
+    Note the caveats above and consider that the ideal application of the AnyObjectReceptacle is to support placement of objects onto other simple objects such as open face crates, bins, baskets, trays, plates, bowls, etc... for which receptacle annotation would be overkill.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        parent_object_handle: str = None,
+        parent_link: Optional[int] = None,
+    ):
+        """
+        Initialize the object as a Receptacle.
+
+        :param precompute_candidate_pointset: Whether or not to pre-compute and cache a discrete point set for sampling instead of using the global bounding box. Uses raycasting with rejection sampling.
+        """
+
+        super().__init__(name, parent_object_handle, parent_link)
+
+    def _get_global_bb(self, sim: habitat_sim.Simulator) -> mn.Range3D:
+        """
+        Get the global AABB of the Receptacle parent object.
+        """
+
+        obj = sutils.get_obj_from_handle(sim, self.parent_object_handle)
+
+        # get the global keypoints of the object
+        receptacle_bb, local_to_global = None, None
+        if self.parent_link is not None and self.parent_link >= 0:
+            link_node = obj.get_link_scene_node(self.parent_link)
+            receptacle_bb = link_node.cumulative_bb
+            local_to_global = link_node.absolute_transformation()
+        else:
+            receptacle_bb = obj.aabb
+            local_to_global = obj.transformation
+        global_keypoints = sutils.get_global_keypoints_from_bb(
+            receptacle_bb, local_to_global
+        )
+
+        # find min and max
+        global_bb = mn.Range3D(
+            np.min(global_keypoints, axis=0), np.max(global_keypoints, axis=0)
+        )
+
+        return global_bb
+
+    @property
+    def bounds(self) -> mn.Range3D:
+        """
+        AABB of the Receptacle in local space.
+        NOTE: this is an effortful query, not a getter.
+        TODO: This needs a sim instance to compute the global bounding box
+        """
+
+        # TODO: grab the bounds from the global AABB at this state?
+        # return mn.Range3D()
+        raise NotImplementedError
+
+    def sample_uniform_local(
+        self, sample_region_scale: float = 1.0
+    ) -> mn.Vector3:
+        """
+        Sample a uniform random point within Receptacle in local space.
+        NOTE: This only works if a pointset cache was pre-computed. Otherwise raises an exception.
+
+        :param sample_region_scale: defines a XZ scaling of the sample region around its center. For example to constrain object spawning toward the center of a receptacle.
+        """
+
+        raise NotImplementedError
+
+    def sample_uniform_global(
+        self, sim: habitat_sim.Simulator, sample_region_scale: float
+    ) -> mn.Vector3:
+        """
+        Sample a uniform random point on the top surface of the global bounding box of the object.
+        TODO: If a pre-computed candidate point set was cached, simply sample from those points instead.
+
+        :param sample_region_scale: defines a XZ scaling of the sample region around its center. No-op for cached points.
+        """
+
+        aabb = self._get_global_bb(sim)
+        if sample_region_scale != 1.0:
+            aabb = mn.Range3D.from_center(
+                aabb.center(),
+                aabb.scaled(
+                    mn.Vector3d(sample_region_scale, 1, sample_region_scale)
+                ).size()
+                / 2.0,
+            )
+
+        sample = np.random.uniform(aabb.back_top_left, aabb.front_top_right)
+        return sample
+
+    def debug_draw(
+        self, sim: habitat_sim.Simulator, color: Optional[mn.Color4] = None
+    ) -> None:
+        """
+        Render the Receptacle with DebugLineRender utility at the current frame.
+        Must be called after each frame is rendered, before querying the image data.
+
+        :param sim: Simulator must be provided.
+        :param color: Optionally provide wireframe color, otherwise magenta.
+        """
+
+        aabb = self._get_global_bb(sim)
+        top_min = aabb.min
+        top_min[1] = aabb.top
+        top_max = aabb.max
+        top_max[1] = aabb.top
+        top_range = mn.Range3D(top_min, top_max)
+        dblr_draw_bb(sim.get_debug_line_render(), top_range, color=color)
 
 
 def get_all_scenedataset_receptacles(
@@ -453,7 +642,7 @@ def get_all_scenedataset_receptacles(
 
     :param sim: Simulator must be provided.
     """
-    # cache the rigid and articulated receptacles seperately
+    # cache the rigid and articulated receptacles separately
     receptacles: Dict[str, Dict[str, List[str]]] = {
         "stage": {},
         "rigid": {},
@@ -531,6 +720,7 @@ def import_tri_mesh(mesh_file: str) -> List[mn.trade.MeshData]:
 
     :param mesh_file: The input meshes file. NOTE: must contain only triangles.
     """
+    _manager.set_preferred_plugins("StanfordImporter", ["AssimpImporter"])
     importer = _manager.load_and_instantiate("AnySceneImporter")
     importer.open_file(mesh_file)
 
@@ -694,6 +884,7 @@ def parse_receptacles_from_user_config(
                             up=up,
                             parent_object_handle=parent_object_handle,
                             parent_link=parent_link_ix,
+                            scale=ao_uniform_scaling,
                         )
                     )
             else:
@@ -704,13 +895,42 @@ def parse_receptacles_from_user_config(
     return receptacles
 
 
+def cull_filtered_receptacles(
+    receptacles: List[Receptacle], exclude_filter_strings: List[str]
+) -> List[Receptacle]:
+    """
+    Filter a list of Receptacles to exclude any which are matched to the provided exclude_filter_strings.
+    Each string in filter strings is checked against each receptacle's unique_name. If the unique_name contains any filter string as a substring, that Receptacle is filtered.
+
+    :param receptacles: The initial list of Receptacle objects.
+    :param exclude_filter_strings: The list of filter substrings defining receptacles which should not be active in the current scene.
+
+    :return: The filtered list of Receptacle objects. Those which contain none of the filter substrings in their unqiue_name.
+    """
+
+    filtered_receptacles = []
+    for receptacle in receptacles:
+        culled = False
+        for filter_substring in exclude_filter_strings:
+            if filter_substring in receptacle.unique_name:
+                culled = True
+                break
+        if not culled:
+            filtered_receptacles.append(receptacle)
+    return filtered_receptacles
+
+
 def find_receptacles(
-    sim: habitat_sim.Simulator, ignore_handles: Optional[List[str]] = None
+    sim: habitat_sim.Simulator,
+    ignore_handles: Optional[List[str]] = None,
+    exclude_filter_strings: Optional[List[str]] = None,
 ) -> List[Union[Receptacle, AABBReceptacle, TriangleMeshReceptacle]]:
     """
     Scrape and return a list of all Receptacles defined in the metadata belonging to the scene's currently instanced objects.
 
     :param sim: Simulator must be provided.
+    :param ignore_handles: An optional list of handles for ManagedObjects which should be skipped. No Receptacles for matching objects will be returned.
+    :param exclude_filter_strings: An optional list of excluded Receptacle substrings. Any Receptacle which contains any excluded filter substring in its unique_name will not be included in the returned set.
     """
 
     obj_mgr = sim.get_rigid_object_manager()
@@ -772,6 +992,12 @@ def find_receptacles(
             )
         )
 
+    # filter out individual Receptacles with excluded substrings
+    if exclude_filter_strings is not None:
+        receptacles = cull_filtered_receptacles(
+            receptacles, exclude_filter_strings
+        )
+
     # check for non-unique naming mistakes in user dataset
     for rec_ix in range(len(receptacles)):
         rec1_unique_name = receptacles[rec_ix].unique_name
@@ -792,6 +1018,92 @@ class ReceptacleSet:
     excluded_receptacle_substrings: List[str]
     is_on_top_of_sampler: bool = False
     comment: str = ""
+
+
+def get_scene_rec_filter_filepath(
+    mm: habitat_sim.metadata.MetadataMediator, scene_handle: str
+) -> str:
+    """
+    Look in the user_defined metadata for a scene to find the configured filepath for the scene's Receptacle filter file.
+
+    :return: Filter filepath or None if not found.
+    """
+    scene_user_defined = mm.get_scene_user_defined(scene_handle)
+    if scene_user_defined is not None and scene_user_defined.has_value(
+        "scene_filter_file"
+    ):
+        scene_filter_file = scene_user_defined.get("scene_filter_file")
+        scene_filter_file = os.path.join(
+            os.path.dirname(mm.active_dataset), scene_filter_file
+        )
+        return scene_filter_file
+    return None
+
+
+def get_excluded_recs_from_filter_file(
+    rec_filter_filepath: str, filter_types: Optional[List[str]] = None
+) -> List[str]:
+    """
+    Load and digest a Receptacle filter file to generate a list of Receptacle.unique_names strings which should be excluded from the active ReceptacleSet.
+
+    :param filter_types: Optionally specify a particular set of filter types to scrape. Default is all exclusion filters.
+    """
+
+    possible_exclude_filter_types = [
+        "manually_filtered",
+        "access_filtered",
+        "stability_filtered",
+        "height_filtered",
+    ]
+
+    if filter_types is None:
+        filter_types = possible_exclude_filter_types
+    else:
+        for filter_type in filter_types:
+            assert (
+                filter_type in possible_exclude_filter_types
+            ), f"Specified filter type '{filter_type}' is not in supported set: {possible_exclude_filter_types}"
+
+    return get_recs_from_filter_file(rec_filter_filepath, filter_types)
+
+
+def get_recs_from_filter_file(
+    rec_filter_filepath: str, filter_types: List[str]
+) -> List[str]:
+    """
+    Load and digest a Receptacle filter file to generate a list of Receptacle.unique_names which belong to a particular filter subset.
+
+    :param filter_types: Specify a particular subset of filter types to include.
+    """
+
+    # all allowed filter set types include:
+    all_possible_filter_types = [
+        "active",
+        "manually_filtered",
+        "access_filtered",
+        "stability_filtered",
+        "height_filtered",
+        "within_set",
+    ]
+
+    # check that specified query filter types are valid
+    for filter_type in filter_types:
+        assert (
+            filter_type in all_possible_filter_types
+        ), f"Specified filter type '{filter_type}' is not in supported set: {all_possible_filter_types}"
+
+    filtered_unique_names = []
+    with open(rec_filter_filepath, "r") as f:
+        filter_json = json.load(f)
+        for filter_type in filter_types:
+            if filter_type in filter_json:
+                for filtered_unique_name in filter_json[filter_type]:
+                    filtered_unique_names.append(filtered_unique_name)
+            else:
+                logger.warning(
+                    f"The filter file '{rec_filter_filepath}' does not contain the requested filter type '{filter_type}'."
+                )
+    return list(set(filtered_unique_names))
 
 
 class ReceptacleTracker:
@@ -824,34 +1136,19 @@ class ReceptacleTracker:
         :param mm: The active MetadataMediator instance from which to load the filter data.
         :param scene_handle: The handle of the currently instantiated scene.
         """
-        scene_user_defined = mm.get_scene_user_defined(scene_handle)
-        filtered_unique_names = []
-        if scene_user_defined is not None and scene_user_defined.has_value(
-            "scene_filter_file"
-        ):
-            scene_filter_file = scene_user_defined.get("scene_filter_file")
-            # construct the dataset level path for the filter data file
-            scene_filter_file = os.path.join(
-                os.path.dirname(mm.active_dataset), scene_filter_file
+        scene_filter_filepath = get_scene_rec_filter_filepath(mm, scene_handle)
+        if scene_filter_filepath is not None:
+            filtered_unique_names = get_excluded_recs_from_filter_file(
+                scene_filter_filepath
             )
-            with open(scene_filter_file, "r") as f:
-                filter_json = json.load(f)
-                for filter_type in [
-                    "manually_filtered",
-                    "access_filtered",
-                    "stability_filtered",
-                    "height_filtered",
-                ]:
-                    for filtered_unique_name in filter_json[filter_type]:
-                        filtered_unique_names.append(filtered_unique_name)
             # add exclusion filters to all receptacles sets
             for r_set in self._receptacle_sets.values():
                 r_set.excluded_receptacle_substrings.extend(
                     filtered_unique_names
                 )
-            logger.info(
-                f"Loaded receptacle filter data for scene '{scene_handle}' from configured filter file '{scene_filter_file}'."
-            )
+                logger.info(
+                    f"Loaded receptacle filter data for scene '{scene_handle}' from configured filter file '{scene_filter_filepath}'."
+                )
         else:
             logger.info(
                 f"Loaded receptacle filter data for scene '{scene_handle}' does not have configured filter file."
@@ -935,12 +1232,12 @@ def get_navigable_receptacles(
     """
     Given a list of receptacles, return the ones that are heuristically navigable from the largest indoor navmesh island.
 
-    Navigability heuristic is that at least two Receptacle AABB corners are within 1.5m of the largest indoor navmesh island and obejct is within 0.2m of the configured agent height.
+    Navigability heuristic is that at least two Receptacle AABB corners are within 1.5m of the largest indoor navmesh island and object is within 0.2m of the configured agent height.
 
     :param sim: The Simulator instance.
     :param receptacles: The list of Receptacle instances to cull.
     :param nav_island: The NavMesh island on which to check accessibility. -1 is the full NavMesh.
-    :param nav_to_min_distance: Minimum distance threshold. -1 opts out of the test and returns True (i.e. no minumum distance).
+    :param nav_to_min_distance: Minimum distance threshold. -1 opts out of the test and returns True (i.e. no minimum distance).
 
     :return: The list of heuristic passing Receptacle instances.
     """
@@ -948,21 +1245,22 @@ def get_navigable_receptacles(
     max_access_height = 1.3
     navigable_receptacles: List[Receptacle] = []
     for receptacle in receptacles:
-        obj_mgr = get_obj_manager_for_receptacle(sim, receptacle)
-        receptacle_obj = obj_mgr.get_object_by_handle(
-            receptacle.parent_object_handle
+        receptacle_obj = sutils.get_obj_from_handle(
+            sim, receptacle.parent_object_handle
         )
+
+        # get the global bounding box of the object
         receptacle_bb = None
-        if receptacle.is_parent_object_articulated:
-            receptacle_bb = get_ao_link_aabb(
-                receptacle_obj.object_id,
-                receptacle.parent_link,
-                sim,
-                transformed=True,
+        if receptacle.parent_link >= 0:
+            link_node = receptacle_obj.get_link_scene_node(
+                receptacle.parent_link
+            )
+            receptacle_bb = habitat_sim.geo.get_transformed_bb(
+                link_node.cumulative_bb, link_node.absolute_transformation()
             )
         else:
-            receptacle_bb = get_rigid_aabb(
-                receptacle_obj.object_id, sim, transformed=True
+            receptacle_bb = habitat_sim.geo.get_transformed_bb(
+                receptacle_obj.aabb, receptacle_obj.transformation
             )
 
         recep_points = [
@@ -981,7 +1279,7 @@ def get_navigable_receptacles(
                     height=max_access_height,
                     nav_to_min_distance=nav_to_min_distance,
                     nav_island=nav_island,
-                    target_object_id=receptacle_obj.object_id,
+                    target_object_ids=[receptacle_obj.object_id],
                 )
                 for point in recep_points
             )

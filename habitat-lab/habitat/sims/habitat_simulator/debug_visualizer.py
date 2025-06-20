@@ -4,24 +4,95 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+"""The DebugVisualizer (DBV) module provides a singleton class for quickly generating custom debug RGB images from an already instantiated Simulator instance. DebugObservation provides a wrapper class for accessing, saving, showing, and manipulating numpy image matrices with PIL. The module also provides some helper functions for highlighting objects with DebugLineRender and stitching images together into a matrix of images."""
+
+import math
 import os
-from typing import List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import magnum as mn
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import habitat_sim
 from habitat.core.logging import logger
 from habitat.utils.common import check_make_dir
+from habitat_sim.physics import ManagedArticulatedObject, ManagedRigidObject
+
+
+def project_point(
+    render_camera: habitat_sim.sensor.CameraSensor, point: mn.Vector3
+) -> mn.Vector2:
+    """
+    Project a 3D point into the render_camera's 2D screen space.
+
+    :param render_camera: The RenderCamera object. E.g. sensor._sensor_object.render_camera
+    :param point: The 3D global point to project.
+
+    :return: The 2D pixel coordinates in the resulting sensor's observation image.
+    """
+
+    # use the camera and projection matrices to transform the point onto the near plane
+    projected_point_3d = render_camera.projection_matrix.transform_point(
+        render_camera.camera_matrix.transform_point(point)
+    )
+
+    # convert the 3D near plane point to integer pixel space
+    point_2d = mn.Vector2(projected_point_3d[0], -projected_point_3d[1])
+    point_2d = point_2d / render_camera.projection_size()[0]
+    point_2d += mn.Vector2(0.5)
+    point_2d *= render_camera.viewport
+    return mn.Vector2i(point_2d)
+
+
+def stitch_image_matrix(images: List[Image.Image], num_col: int = 8):
+    """
+    Stitch together a set of images into a single image matrix.
+
+    :param images: The PIL.Image.Image objects
+    :param num_col: The number of columns in the matrix
+    :return: A DebugObservation wrapper with the stitched image.
+    """
+
+    if len(images) == 0:
+        raise ValueError("No images provided.")
+
+    image_mode = images[0].mode
+    image_size = images[0].size
+    for image in images:
+        if image.size != image_size:
+            # TODO: allow shrinking/growing images
+            raise ValueError("Image sizes must all match.")
+    num_rows = math.ceil(len(images) / float(num_col))
+    stitched_image = Image.new(
+        image_mode, size=(image_size[0] * num_col, image_size[1] * num_rows)
+    )
+
+    for ix, image in enumerate(images):
+        col = ix % num_col
+        row = math.floor(ix / num_col)
+        coords = (int(col * image_size[0]), int(row * image_size[1]))
+        stitched_image.paste(image, box=coords)
+
+    bdo = DebugObservation(np.array(stitched_image))
+    bdo.image = stitched_image
+    return bdo
 
 
 class DebugObservation:
     """
     Observation wrapper to provide a simple interface for managing debug observations and caching the image.
+
+    NOTE: PIL.Image.Image.size is (width, height) while VisualSensor.resolution is (height, width)
     """
 
-    def __init__(self, obs_data: np.ndarray):
+    def __init__(self, obs_data: np.ndarray) -> None:
+        """..
+
+        :param obs_data: The visual sensor observation output matrix. E.g. from `sensor.get_observation()`
+
+        """
+
         self.obs_data: np.ndarray = obs_data
         self.image: Image.Image = (
             None  # creation deferred to show or save time
@@ -54,13 +125,35 @@ class DebugObservation:
             self.create_image()
         self.image.show()
 
+    def show_point(self, p_2d: np.ndarray) -> None:
+        """
+        Show the image with a 2D point marked on it as a blue circle.
+
+        :param p_2d: The 2D pixel point in the image.
+        """
+        if self.image is None:
+            self.create_image()
+        point_image = self.image.copy()
+        draw = ImageDraw.Draw(point_image)
+        circle_rad = 5  # pixels
+        draw.ellipse(
+            (
+                p_2d[0] - circle_rad,
+                p_2d[1] - circle_rad,
+                p_2d[0] + circle_rad,
+                p_2d[1] + circle_rad,
+            ),
+            fill="blue",
+            outline="blue",
+        )
+        point_image.show()
+
     def save(self, output_path: str, prefix: str = "") -> str:
         """
         Save the Image as png to a given location.
 
         :param output_path: Directory path for saving the image.
-        :param prefix: Optional prefix for output filename. Filename format: "<prefix>month_day_year_hourminutesecondmicrosecond.png"
-
+        :param prefix: Optional prefix for output filename. Filename format: :py:`<prefix>month_day_year_hourminutesecondmicrosecond.png`
         :return: file path of the saved image.
         """
 
@@ -77,18 +170,74 @@ class DebugObservation:
         return file_path
 
 
+def draw_object_highlight(
+    obj: Union[ManagedRigidObject, ManagedArticulatedObject],
+    debug_line_render: habitat_sim.gfx.DebugLineRender,
+    camera_transform: mn.Matrix4,
+    color: mn.Color4 = None,
+) -> None:
+    """
+    Draw a circle around the object to highlight it. The circle normal is oriented toward the camera_transform.
+
+    :param obj: The ManagedObject
+    :param debug_line_render: The DebugLineRender instance for the Simulator.
+    :param camera_transform: The Matrix4 transform of the camera. Used to orient the circle normal.
+    :param color: The color of the circle. Default magenta.
+    """
+
+    if color is None:
+        color = mn.Color4.magenta()
+
+    obj_bb = obj.aabb
+    obj_center = obj.transformation.transform_point(obj_bb.center())
+    obj_size = obj_bb.size().max() / 2
+
+    debug_line_render.draw_circle(
+        translation=obj_center,
+        radius=obj_size,
+        color=color,
+        normal=camera_transform.translation - obj_center,
+    )
+
+
+def dblr_draw_bb(
+    debug_line_render: habitat_sim.gfx.DebugLineRender,
+    bb: mn.Range3D,
+    transform: mn.Matrix4 = None,
+    color: mn.Color4 = None,
+) -> None:
+    """
+    Draw an optionally transformed bounding box with the DebugLineRender interface.
+
+    :param debug_line_render: The DebugLineRender instance.
+    :param bb: The local bounding box to draw.
+    :param transform: The local to global transformation to apply to the local bb.
+    :param color: Optional color for the lines. Default is magenta.
+    """
+
+    if color is None:
+        color = mn.Color4.magenta()
+    if transform is not None:
+        debug_line_render.push_transform(transform)
+    debug_line_render.draw_box(bb.min, bb.max, color)
+    if transform is not None:
+        debug_line_render.pop_transform()
+
+
 class DebugVisualizer:
     """
     Support class for simple visual debugging of a Simulator instance.
     Assumes the default agent (0) is a camera (i.e. there exists an RGB sensor coincident with agent 0 transformation).
 
     Available for visual debugging from PDB!
+
     Example:
-    from habitat.sims.habitat_simulator.debug_visualizer import DebugVisualizer
-    dbv = DebugVisualizer(sim)
-    dbv.get_observation().show()
-    dbv.translate(mn.Vector3(1,0,0), show=True)
-    dbv.peek(my_object, peek_all_axis=True).show()
+
+    >>> from habitat.sims.habitat_simulator.debug_visualizer import DebugVisualizer
+    >>> dbv = DebugVisualizer(sim)
+    >>> dbv.get_observation().show()
+    >>> dbv.translate(mn.Vector3(1,0,0), show=True)
+    >>> dbv.peek(my_object, peek_all_axis=True).show()
     """
 
     def __init__(
@@ -96,6 +245,8 @@ class DebugVisualizer:
         sim: habitat_sim.Simulator,
         output_path: str = "visual_debug_output/",
         resolution: Tuple[int, int] = (500, 500),
+        clear_color: Optional[mn.Color4] = None,
+        equirect=False,
     ) -> None:
         """
         Initialize the debugger provided a Simulator and the uuid of the debug sensor.
@@ -103,7 +254,8 @@ class DebugVisualizer:
 
         :param sim: Simulator instance must be provided for attachment.
         :param output_path: Directory path for saving debug images and videos.
-        :param resolution: The desired sensor resolution for any new debug agent.
+        :param resolution: The desired sensor resolution for any new debug agent (height, width).
+        :param equirect: Optionally use an Equirectangular (360 cube-map) sensor.
         """
 
         self.sim = sim
@@ -115,7 +267,44 @@ class DebugVisualizer:
         self.debug_line_render = sim.get_debug_line_render()
         self.sensor: habitat_sim.simulator.Sensor = None
         self.agent: habitat_sim.simulator.Agent = None
+
+        # optionally set a debug_draw callback function to be run every time a frame is rendered
+        self.dblr_callback: Callable = None
+        self.dblr_callback_params: Dict[str, Any] = None  # kwargs
+
         self.agent_id = 0
+        # default black background
+        self.clear_color = (
+            mn.Color4.from_linear_rgb_int(0)
+            if clear_color is None
+            else clear_color
+        )
+        self._equirect = equirect
+
+    def __del__(self) -> None:
+        """
+        When a DBV is removed, it should clean up its agent/sensor.
+        """
+        self.remove_dbv_agent()
+
+    @property
+    def equirect(self) -> bool:
+        return self._equirect
+
+    @equirect.setter
+    def equirect(self, equirect: bool) -> None:
+        """
+        Set the equirect mode on or off.
+        If dbv is already initialized to a different mode, re-initialize it.
+        """
+
+        if self._equirect != equirect:
+            # change the value
+            self._equirect = equirect
+            if self.agent is not None:
+                # re-initialize the agent
+                self.remove_dbv_agent()
+                self.create_dbv_agent(self.sensor_resolution)
 
     def create_dbv_agent(
         self, resolution: Tuple[int, int] = (500, 500)
@@ -130,11 +319,16 @@ class DebugVisualizer:
 
         debug_agent_config = habitat_sim.agent.AgentConfiguration()
 
-        debug_sensor_spec = habitat_sim.CameraSensorSpec()
+        debug_sensor_spec = (
+            habitat_sim.CameraSensorSpec()
+            if not self._equirect
+            else habitat_sim.EquirectangularSensorSpec()
+        )
         debug_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
         debug_sensor_spec.position = [0.0, 0.0, 0.0]
         debug_sensor_spec.resolution = [resolution[0], resolution[1]]
         debug_sensor_spec.uuid = self.sensor_uuid
+        debug_sensor_spec.clear_color = self.clear_color
 
         debug_agent_config.sensor_specifications = [debug_sensor_spec]
         self.sim.agents.append(
@@ -152,6 +346,26 @@ class DebugVisualizer:
         self.sensor = self.sim._Simulator__sensors[self.agent_id][
             self.sensor_uuid
         ]
+
+    def remove_dbv_agent(self) -> None:
+        """
+        Clean up a previously initialized DBV agent.
+        """
+
+        if self.agent is None:
+            print("No active dbv agent to remove.")
+            return
+
+        # NOTE: this guards against cases where the Simulator is deconstructed before the DBV
+        if self.agent_id < len(self.sim.agents):
+            # remove the agent and sensor from the Simulator instance
+            self.agent.close()
+            del self.sim._Simulator__sensors[self.agent_id]
+            del self.sim.agents[self.agent_id]
+
+        self.agent = None
+        self.agent_id = 0
+        self.sensor = None
 
     def look_at(
         self,
@@ -198,7 +412,6 @@ class DebugVisualizer:
         :param vec: The delta vector to translate by.
         :param local: If True, the delta vector is applied in local space.
         :param show: If True, show the image from the resulting state.
-
         :return: if show is selected, the resulting observation is returned. Otherwise None.
         """
 
@@ -229,7 +442,6 @@ class DebugVisualizer:
         :param axis: The rotation axis. Default Y axis.
         :param local: If True, the delta vector is applied in local space.
         :param show: If True, show the image from the resulting state.
-
         :return: if show is selected, the resulting observation is returned. Otherwise None.
         """
 
@@ -260,7 +472,6 @@ class DebugVisualizer:
 
         :param look_at: 3D global position to point the camera towards.
         :param look_from: 3D global position of the camera.
-
         :return: a DebugObservation wrapping the np.ndarray.
         """
 
@@ -269,6 +480,8 @@ class DebugVisualizer:
 
         if look_at is not None:
             self.look_at(look_at, look_from)
+        if self.dblr_callback is not None:
+            self.dblr_callback(**self.dblr_callback_params)
         self.sensor.draw_observation()
         return DebugObservation(self.sensor.get_observation())
 
@@ -282,7 +495,7 @@ class DebugVisualizer:
         :param debug_lines: A set of debug line strips with accompanying colors. Each list entry contains a list of points and a color.
         """
 
-        # support None input to make useage easier elsewhere
+        # support None input to make usage easier elsewhere
         if debug_lines is not None:
             for points, color in debug_lines:
                 for p_ix, point in enumerate(points):
@@ -307,7 +520,7 @@ class DebugVisualizer:
         :param debug_circles: A list of debug line render circle Tuples, each with (center, radius, normal, color).
         """
 
-        # support None input to make useage easier elsewhere
+        # support None input to make usage easier elsewhere
         if debug_circles is not None:
             for center, radius, normal, color in debug_circles:
                 self.debug_line_render.draw_circle(
@@ -366,7 +579,6 @@ class DebugVisualizer:
         :param peek_all_axis: Optionally create a merged 3x2 matrix of images looking at the object from all angles.
         :param debug_lines: Optionally provide a list of debug line render tuples, each with a list of points and a color. These will be displayed in all peek images.
         :param debug_circles: Optionally provide a list of debug line render circle Tuples, each with (center, radius, normal, color). These will be displayed in all peek images.
-
         :return: the DebugObservation containing either 1 image or 6 joined images depending on value of peek_all_axis.
         """
 
@@ -407,34 +619,8 @@ class DebugVisualizer:
                 subject = subject_obj
 
         if subject_bb is None:
-            # if we have gathered an object instance, process the bounding box and transform
-            if isinstance(
-                subject, habitat_sim.physics.ManagedArticulatedObject
-            ):
-                from habitat.sims.habitat_simulator.sim_utilities import (
-                    get_ao_global_bb,
-                )
-
-                obj_bb = get_ao_global_bb(subject)
-                obj_bb_local = mn.Range3D.from_center(
-                    subject.transformation.inverted().transform_point(
-                        obj_bb.center()
-                    ),
-                    obj_bb.size() / 2.0,
-                )
-                subject_bb = obj_bb_local
-                subject_transform = (
-                    subject.root_scene_node.absolute_transformation()
-                )
-            elif isinstance(subject, habitat_sim.physics.ManagedRigidObject):
-                subject_bb = subject.root_scene_node.cumulative_bb
-                subject_transform = (
-                    subject.root_scene_node.absolute_transformation()
-                )
-            else:
-                raise AssertionError(
-                    f"The subject, '{subject}', is not a supported value. Should be an object, object handle, object_id integer, or one of 'stage' or 'scene'."
-                )
+            subject_bb = subject.aabb
+            subject_transform = subject.transformation
 
         return self._peek_bb(
             bb=subject_bb,
@@ -466,7 +652,6 @@ class DebugVisualizer:
         :param peek_all_axis: Optionally create a merged 3x2 matrix of images looking at the object from all angles.
         :param debug_lines: Optionally provide a list of debug line render tuples, each with a list of points and a color. These will be displayed in all peek images.
         :param debug_circles: Optionally provide a list of debug line render circle Tuples, each with (center, radius, normal, color). These will be displayed in all peek images.
-
         :return: the DebugObservation containing either 1 image or 6 joined images depending on value of peek_all_axis.
         """
 
@@ -477,7 +662,7 @@ class DebugVisualizer:
             world_transform = mn.Matrix4.identity_init()
         look_at = world_transform.transform_point(bb.center())
         bb_size = bb.size()
-        fov = self.sensor._spec.hfov
+        fov = 90 if self._equirect else self.sensor._spec.hfov
         aspect = (
             float(self.sensor._spec.resolution[1])
             / self.sensor._spec.resolution[0]
@@ -485,7 +670,7 @@ class DebugVisualizer:
         import math
 
         # compute the optimal view distance from the camera specs and object size
-        distance = (np.amax(np.array(bb_size)) * 1.1 / aspect) / math.tan(
+        distance = (np.amax(np.array(bb_size)) / aspect) / math.tan(
             fov / (360 / math.pi)
         )
         if cam_local_pos is None:
@@ -547,7 +732,7 @@ class DebugVisualizer:
         :param output_path: Optional directory path for saving the video. Otherwise use self.output_path.
         :param prefix: Optional prefix for output filename. Filename format: "<output_path><prefix><timestamp>"
         :param fps: Framerate of the video. Defaults to 4FPS expecting disjoint still frames.
-        :param obs_cache: Optioanlly provide an external observation cache datastructure in place of self.debug_obs.
+        :param obs_cache: Optionally provide an external observation cache datastructure in place of self.debug_obs.
         """
 
         if output_path is None:

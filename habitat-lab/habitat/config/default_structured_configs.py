@@ -288,8 +288,6 @@ class BaseVelocityNonCylinderActionConfig(ActionConfig):
     # There is a collision if the difference between the clamped NavMesh position and target position
     # is more than collision_threshold for any point.
     collision_threshold: float = 1e-5
-    # The x and y locations of the clamped NavMesh position
-    navmesh_offset: Optional[List[float]] = None
     # If we allow the robot to move laterally.
     enable_lateral_move: bool = False
     # If the condition of sliding includes the checking of rotation
@@ -1669,7 +1667,7 @@ class AgentConfig(HabitatBaseConfig):
     max_climb: float = 0.2
     max_slope: float = 45.0
     grasp_managers: int = 1
-    sim_sensors: Dict[str, SimulatorSensorConfig] = field(default_factory=dict)
+    sim_sensors: Dict[str, Any] = field(default_factory=dict)
     is_set_start_state: bool = False
     start_position: List[float] = field(default_factory=lambda: [0, 0, 0])
     start_rotation: List[float] = field(default_factory=lambda: [0, 0, 0, 1])
@@ -1682,6 +1680,11 @@ class AgentConfig(HabitatBaseConfig):
     ik_arm_urdf: Optional[str] = None
     # File to motion data, used to play pre-recorded motions
     motion_data_path: str = ""
+    auto_update_sensor_transform: bool = True
+    """
+    If `True`, the agent's sensor transforms are automatically updated every frame.
+    """
+    # TODO: Remove this flag once sensors are decoupled from agents.
 
 
 @dataclass
@@ -1791,38 +1794,6 @@ class SimulatorConfig(HabitatBaseConfig):
 
 
 @dataclass
-class PyrobotSensor(HabitatBaseConfig):
-    pass
-
-
-@dataclass
-class PyrobotVisualSensorConfig(PyrobotSensor):
-    type: str = MISSING
-    height: int = 480
-    width: int = 640
-
-
-@dataclass
-class PyrobotRGBSensorConfig(PyrobotVisualSensorConfig):
-    type: str = "PyRobotRGBSensor"
-    center_crop: bool = False
-
-
-@dataclass
-class PyrobotDepthSensorConfig(PyrobotVisualSensorConfig):
-    type: str = "PyRobotDepthSensor"
-    min_depth: float = 0.0
-    max_depth: float = 5.0
-    normalize_depth: bool = True
-    center_crop: bool = False
-
-
-@dataclass
-class PyrobotBumpSensorConfig(PyrobotSensor):
-    type: str = "PyRobotBumpSensor"
-
-
-@dataclass
 class LocobotConfig(HabitatBaseConfig):
     actions: List[str] = field(
         default_factory=lambda: ["base_actions", "camera_actions"]
@@ -1836,23 +1807,6 @@ class LocobotConfig(HabitatBaseConfig):
 
 
 @dataclass
-class PyrobotConfig(HabitatBaseConfig):
-    # types of robots supported:
-    robots: List[str] = field(default_factory=lambda: ["locobot"])
-    robot: str = "locobot"
-    sensors: Dict[str, PyrobotSensor] = field(
-        default_factory=lambda: {
-            "rgb_sensor": PyrobotRGBSensorConfig(),
-            "depth_sensor": PyrobotDepthSensorConfig(),
-            "bump_sensor": PyrobotBumpSensorConfig(),
-        }
-    )
-    base_controller: str = "proportional"
-    base_planner: str = "none"
-    locobot: LocobotConfig = LocobotConfig()
-
-
-@dataclass
 class DatasetConfig(HabitatBaseConfig):
     r"""Configuration for the dataset of the task.
 
@@ -1860,6 +1814,7 @@ class DatasetConfig(HabitatBaseConfig):
     :property scenes_dir: The path to the directory containing the scenes that will be used. You should put all your scenes in the same folder (example `data/scene_datasets`) to avoid having to change it.
     :property data_path: The path to the episode dataset. Episodes need to be compatible with the `type` argument (so they will load properly) and only use scenes that are present in the `scenes_dir`.
     :property split: `data_path` can have a `split` in the path. For example: "data/datasets/pointnav/habitat-test-scenes/v1/{split}/{split}.json.gz" the value in "{split}" will be replaced by the value of the `split` argument. This allows to easily swap between training, validation and test episodes by only changing the split argument.
+    :property metadata: Optional. Additional information for interpreting the dataset.
 
     A dataset consists of episodes
     (a start configuration for a task within a scene) and a scene dataset
@@ -1873,6 +1828,8 @@ class DatasetConfig(HabitatBaseConfig):
         "data/datasets/pointnav/"
         "habitat-test-scenes/v1/{split}/{split}.json.gz"
     )
+    # TODO: Make this field a structured dataclass.
+    metadata: Optional[Any] = None
 
 
 @dataclass

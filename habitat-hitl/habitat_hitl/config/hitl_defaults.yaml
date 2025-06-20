@@ -4,6 +4,8 @@ habitat_baselines:
   num_environments: 1
 
 habitat_hitl:
+  # LabDriver or SimDriver. LabDriver creates a Habitat-lab env. SimDriver only creates a Habitat-sim simulator.
+  driver: "LabDriver"
   window:
     # title displayed in application title bar GUI
     title: "Habitat HITL Application"
@@ -20,26 +22,42 @@ habitat_hitl:
     # When enabled, we run a websocket server that connects to remote clients. A HITL app with networking enabled is an "HITL server". See pick_throw_vr example app.
     enable: False
 
+    # Number of accepted concurrent clients (multiplayer if higher than one). All connections beyond this count will be rejected. Beware that this can be different from the agent count.
+    max_client_count: 1
+
+    # Accept incoming connections by default. If disabled, connections must be activated using InterprocessRecord.enable_new_connections().
+    enable_connections_by_default: True
+
     # We'll listen for incoming client connections at this port.
-    port: 8888
+    port: 18000
 
     # If True, NetworkManager will wait until the application issues ClientMessageManager.signal_app_ready before sending the first gfx-replay keyframe to the client. This gives the application an opportunity to e.g. change scenes when a client connects. If False, NetworkManager will start sending keyframes immediately upon connect.
     wait_for_app_ready_signal: False
 
-    # Used with AWS elastic load balancer (ELB) health checks. If enabled, we run a separate HTTP server that returns a code based on whether the HITL server is available to accept new client connections. Note this HTTP server doesn't serve any files or other content. Note the current HITL server implementation only handles one client at a time, so the expected behavior is that it becomes "unavailable" once it has a connected client. The HTTP server can be tested locally with e.g. curl -i 0.0.0.0:8889.
+    # Used with AWS elastic load balancer (ELB) health checks. If enabled, we run a separate HTTP server that returns a code based on whether the HITL server is available to accept new client connections. Note this HTTP server doesn't serve any files or other content. Note the current HITL server implementation only handles one client at a time, so the expected behavior is that it becomes "unavailable" once it has a connected client. The HTTP server can be tested locally with e.g. curl -i 0.0.0.0:18100.
     http_availability_server:
       enable: False
-      port: 8889
+      port: 18100
       # HTTP codes
       code_available: 200  # "Ok"
       code_unavailable: 503  # "Service Unavailable"
 
+    # HITL clients may emit UDP broadcasts to auto-discover an available HITL server on the local network. If the discovery server is enabled, the HITL port will be given as a response to these broadcasts allowing for a simplified connection flow.
+    discovery_server:
+      enable: True
+      port: 18200
+
     # Optionally kick an idle client after n seconds.
     client_max_idle_duration: ~
 
+    # Override incoming client connection parameters for testing purposes.
+    mock_connection_params_dict: None
+
     client_sync:
-      # If enabled, the main camera transform will be sent to the client. Disable if the client should control its own camera (e.g. VR).
-      camera_transform: True
+      # If enabled, the server main camera transform will be sent to the client. Disable if the client should control its own camera (e.g. VR), or if clients must use different camera transforms (e.g. multiplayer).
+      server_camera: True
+      # If enabled, the first client input is relayed to the server's GuiInput. Disable if clients have independent controls from the server.
+      server_input: True
       # Enable transmission of skinned mesh poses. If 'camera.first_person_mode' is enabled, you should generally disable this as well as enable `hide_humanoid_in_gui` because the humanoid will occlude the camera.
       skinning: True
 

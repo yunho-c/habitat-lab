@@ -16,7 +16,7 @@ from habitat_sim.simulator import Simulator
 
 
 class ArticulatedAgentBase(ArticulatedAgentInterface):
-    """Generic manupulator interface defines standard API functions. Robot with a controllable base."""
+    """Generic interface defining standard API functions for a robot with a controllable base."""
 
     def __init__(
         self,
@@ -43,6 +43,7 @@ class ArticulatedAgentBase(ArticulatedAgentInterface):
             compatibility with PyBullet.
         :param sim_obj: Pointer to the simulated object
         """
+
         assert base_type in [
             "mobile",
             "leg",
@@ -82,6 +83,7 @@ class ArticulatedAgentBase(ArticulatedAgentInterface):
 
     def reconfigure(self) -> None:
         """Instantiates the robot the scene. Loads the URDF, sets initial state of parameters, joints, motors, etc..."""
+
         if self.sim_obj is None or not self.sim_obj.is_alive:
             ao_mgr = self._sim.get_articulated_object_manager()
             self.sim_obj = ao_mgr.add_articulated_object_from_urdf(
@@ -128,6 +130,10 @@ class ArticulatedAgentBase(ArticulatedAgentInterface):
         pass
 
     def reset(self) -> None:
+        """
+        Set joint positions and motors back to the initial configuration.
+        """
+
         if (
             hasattr(self.params, "leg_joints")
             and self.params.leg_init_params is not None
@@ -139,6 +145,7 @@ class ArticulatedAgentBase(ArticulatedAgentInterface):
     @property
     def base_pos(self):
         """Get the robot base ground position"""
+
         # via configured local offset from origin
         if self._base_type in ["mobile", "leg"]:
             return (
@@ -153,6 +160,7 @@ class ArticulatedAgentBase(ArticulatedAgentInterface):
     @base_pos.setter
     def base_pos(self, position: mn.Vector3):
         """Set the robot base to a desired ground position (e.g. NavMesh point)"""
+
         # via configured local offset from origin.
         if self._base_type in ["mobile", "leg"]:
             if len(position) != 3:
@@ -168,10 +176,28 @@ class ArticulatedAgentBase(ArticulatedAgentInterface):
 
     @property
     def base_rot(self) -> float:
-        return float(self.sim_obj.rotation.angle())
+        """
+        Returns scalar rotation angle of the agent around the Y axis.
+        Within range (-pi,pi) consistency with setter is tested. Outside that range, an equivalent but distinct rotation angle may be returned (e.g. 2pi == -2pi == 0).
+        """
+        angle = float(self.sim_obj.rotation.angle())
+        # NOTE: if the quaternion axis is inverted (-Y) then the angle will be negated
+        if self.sim_obj.rotation.axis()[1] < 0:
+            angle = -1 * angle
+        # NOTE: This offsetting gives us guarantees of consistency in the (-pi, pi) range.
+        if angle > mn.math.pi:
+            angle -= mn.math.pi * 2
+        elif angle <= -mn.math.pi:
+            angle += mn.math.pi * 2
+        # NOTE: This final fmod ensures that large angles are mapped back into the -2pi, 2pi range.
+        angle = mn.math.fmod(angle, 2 * mn.math.pi)
+        return angle
 
     @base_rot.setter
     def base_rot(self, rotation_y_rad: float):
+        """
+        Set the scalar rotation angle of the agent around the Y axis.
+        """
         if self._base_type == "mobile" or self._base_type == "leg":
             self.sim_obj.rotation = mn.Quaternion.rotation(
                 mn.Rad(rotation_y_rad), mn.Vector3(0, 1, 0)

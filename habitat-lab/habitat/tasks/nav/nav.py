@@ -9,6 +9,7 @@
 from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Tuple, Union
 
 import attr
+import cv2
 import numpy as np
 import quaternion
 from gym import spaces
@@ -32,7 +33,7 @@ from habitat.core.simulator import (
     Simulator,
 )
 from habitat.core.spaces import ActionSpace
-from habitat.core.utils import not_none_validator, try_cv2_import
+from habitat.core.utils import not_none_validator
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
 from habitat.tasks.utils import cartesian_to_polar
 from habitat.utils.geometry_utils import (
@@ -55,9 +56,6 @@ except ImportError:
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
-
-
-cv2 = try_cv2_import()
 
 
 MAP_THICKNESS_SCALAR: int = 128
@@ -774,7 +772,7 @@ class TopDownMap(Measure):
                         goal.object_id
                     ), f"Object_id doesn't correspond to id in semantic scene objects dictionary for episode: {episode}"
 
-                    center = sem_scene.objects[object_id].aabb.center
+                    center = sem_scene.objects[object_id].aabb.center()
                     x_len, _, z_len = (
                         sem_scene.objects[object_id].aabb.sizes / 2.0
                     )
